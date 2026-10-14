@@ -1,0 +1,70 @@
+name: BrightHR UI tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Validate Cucumber scenario and step discovery
+        run: npm test -- --dry-run
+
+  cucumber:
+    needs: checks
+    # Fork pull requests cannot access secrets; live tests create sandbox records.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: brighthr-sandbox-ui-tests
+      cancel-in-progress: false
+    env:
+      BASE_URL: ${{ secrets.BRIGHTHR_BASE_URL }}
+      BRIGHTHR_EMAIL: ${{ secrets.BRIGHTHR_EMAIL }}
+      BRIGHTHR_PASSWORD: ${{ secrets.BRIGHTHR_PASSWORD }}
+      BROWSER: chromium
+      HEADLESS: 'true'
+      SEND_REGISTRATION_EMAIL: 'false'
+      CI_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Check required BrightHR secrets
+        shell: bash
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$BRIGHTHR_EMAIL" ] || [ -z "$BRIGHTHR_PASSWORD" ]; then
+            echo "::error::Set BRIGHTHR_BASE_URL, BRIGHTHR_EMAIL, and BRIGHTHR_PASSWORD in repository Actions secrets."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - name: Upload HTML reports and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brighthr-test-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
